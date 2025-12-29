@@ -1,5 +1,5 @@
 # ps1
-code for the ps1 
+ 
 This repository contains the perception and path-planning stack developed for the Stark Industries PS1 Challenge. The system is designed to navigate a 20X20 grid across three different environments (Lab, Forest, and Desert). 
 Project Overview :localized EMP has crippled Stark Industries' autonomous logistics network.
 This project does the following :
