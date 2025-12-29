@@ -1,0 +1,292 @@
+import os
+import json
+import cv2
+import heapq
+import numpy as np
+from tqdm import tqdm
+import matplotlib.pyplot as plt
+from collections import defaultdict
+from sklearn.cluster import KMeans
+import pandas as pd
+from tqdm import tqdm
+import time as tm
+
+#enter your file's directory 
+DATA_ROOT =  "/kaggle/input/the-blind-flight-synapse-drive-ps-1/SynapseDrive_Dataset"
+
+TRAIN_IMG_DIR = f"{DATA_ROOT}/train/images"
+TRAIN_LBL_DIR = f"{DATA_ROOT}/train/labels"
+TRAIN_VEL_DIR = f"{DATA_ROOT}/train/velocities"
+
+TEST_IMG_DIR  = f"{DATA_ROOT}/test/images"
+TEST_VEL_DIR  = f"{DATA_ROOT}/test/velocities"
+
+BASE_COSTS = {
+    0: {  # LAB
+        0: 1.0,
+        1: float("inf"),
+        2: 3.0,
+        3: 1.0,
+        4: 2.0
+    },
+    1: {  # FOREST
+        0: 1.5,
+        1: float("inf"),
+        2: 2.8,
+        3: 1.5,
+        4: 2.5
+    },
+    2: {  # DESERT
+        0: 1.2,
+        1: float("inf"),
+        2: 3.7,
+        3: 1.2,
+        4: 2.2
+    }
+}
+
+sample_img_name = os.listdir(TRAIN_IMG_DIR)[0]
+img_path = os.path.join(TRAIN_IMG_DIR, sample_img_name)
+
+img = cv2.cvtColor(cv2.imread(img_path), cv2.COLOR_BGR2RGB)
+
+plt.figure(figsize=(4,4))
+plt.imshow(img)
+plt.title(sample_img_name)
+plt.axis("off")
+plt.show()
+GRID_SIZE = 20
+
+def split_into_tiles(img):
+    h, w, _ = img.shape
+    th, tw = h // GRID, w // GRID
+    return [[img[i*th:(i+1)*th, j*tw:(j+1)*tw]
+             for j in range(GRID)] for i in range(GRID)]
+
+def tile_features(tile):
+    mean = tile.mean(axis=(0,1))
+    std  = tile.std(axis=(0,1))
+    return np.concatenate([mean, std])  # 6D
+
+def image_feature(img):
+    tiles = split_into_tiles(img)
+    feats = [tile_features(t) for row in tiles for t in row]
+    return np.mean(feats, axis=0)
+
+GRID =20
+img_feats = []
+img_names = []
+
+for fname in os.listdir(TRAIN_IMG_DIR):
+    img = cv2.cvtColor(
+        cv2.imread(os.path.join(TRAIN_IMG_DIR, fname)),
+        cv2.COLOR_BGR2RGB
+    )
+    img_feats.append(image_feature(img))
+    img_names.append(fname)
+
+img_feats = np.array(img_feats)
+kmeans = KMeans(n_clusters=3, random_state=42)
+terrain_ids = kmeans.fit_predict(img_feats)
+
+terrain_prototypes = defaultdict(lambda: defaultdict(list))
+
+for fname, tid in zip(img_names, terrain_ids):
+    img_id = fname.replace(".png","")
+    img = cv2.cvtColor(
+        cv2.imread(os.path.join(TRAIN_IMG_DIR, fname)),
+        cv2.COLOR_BGR2RGB
+    )
+    tiles = split_into_tiles(img)
+
+    with open(os.path.join(TRAIN_LBL_DIR, img_id + ".json")) as f:
+        grid = json.load(f)["grid"]
+
+    for i in range(GRID):
+        for j in range(GRID):
+            cls = grid[i][j]
+            terrain_prototypes[tid][cls].append(tile_features(tiles[i][j]))
+terrain_prototypes = {
+    tid: {cls: np.mean(v, axis=0) for cls, v in d.items()}
+    for tid, d in terrain_prototypes.items()
+}
+def match_terrain(img):
+    tiles = split_into_tiles(img)
+    feats = [tile_features(t) for row in tiles for t in row][::4]  # sample
+
+    scores = {}
+    for tid, protos in terrain_prototypes.items():
+        s = 0.0
+        for f in feats:
+            s += min(np.linalg.norm(f - p) for p in protos.values())
+        scores[tid] = s
+
+    return min(scores, key=scores.get)
+MOVES = {'u':(-1,0),'d':(1,0),'l':(0,-1),'r':(0,1)}
+def find_start_goal(grid):
+    s=g=None
+    for i in range(20):
+        for j in range(20):
+            if grid[i][j]==3: s=(i,j)
+            if grid[i][j]==4: g=(i,j)
+    return s,g
+
+def dijkstra(grid, boost, tid):
+    base = BASE_COSTS[tid]
+    start, goal = find_start_goal(grid)
+
+    if start is None or goal is None:
+        return ""
+
+    pq = [(0, start)]
+    dist = {start: 0}
+    parent = {}
+
+    while pq:
+        cost, (r, c) = heapq.heappop(pq)
+
+        if (r, c) == goal:
+            break
+
+        for m, (dr, dc) in MOVES.items():
+            nr, nc = r + dr, c + dc
+
+            if 0 <= nr < 20 and 0 <= nc < 20:
+                cls = grid[nr][nc]
+                if cls == 1:  
+                    continue
+
+                
+                new_cost = max(
+                    0.1,
+                    base[cls] * (1.0 - 0.6 * boost[nr][nc])
+                )
+
+              
+                new = cost + new_cost
+
+               
+                if (r, c) in parent:
+                    prev_move = parent[(r, c)][1]
+                    if prev_move != m:
+                        new += 0.05
+
+                if (nr, nc) not in dist or new < dist[(nr, nc)]:
+                    dist[(nr, nc)] = new
+                    parent[(nr, nc)] = ((r, c), m)
+                    heapq.heappush(pq, (new, (nr, nc)))
+
+    if goal not in parent:
+        return ""
+
+    # reconstruct path
+    path = []
+    cur = goal
+    while cur != start:
+        cur, m = parent[cur]
+        path.append(m)
+
+    return "".join(reversed(path))
+
+
+
+
+
+
+def diiiijkstraaaa(grid, boost, tid):
+    base = BASE_COSTS[tid]
+    start, goal = find_start_goal(grid)
+    if start is None or goal is None:
+        return ""
+
+    pq=[(0,start)]
+    dist={start:0}
+    parent={}
+
+    while pq:
+        cost,(r,c)=heapq.heappop(pq)
+        if (r,c)==goal: break
+        for m,(dr,dc) in MOVES.items():
+            nr,nc=r+dr,c+dc
+            if 0<=nr<20 and 0<=nc<20:
+                cls=grid[nr][nc]
+                if cls==1: continue
+                new=cost+(base[cls]-boost[nr][nc])
+                if (nr,nc) not in dist or new<dist[(nr,nc)]:
+                    dist[(nr,nc)]=new
+                    parent[(nr,nc)]=((r,c),m)
+                    heapq.heappush(pq,(new,(nr,nc)))
+
+    if goal not in parent: return ""
+    path=[]
+    cur=goal
+    while cur!=start:
+        cur,m=parent[cur]
+        path.append(m)
+    return ''.join(reversed(path))
+def classify_tile(tile, terrain_prototypes, tid):
+    feat = tile_features(tile)
+    return min(
+        terrain_prototypes[tid].keys(),
+        key=lambda cls: np.linalg.norm(feat - terrain_prototypes[tid][cls])
+    )
+GRID =20
+def classify_grid_fast(img, tid):
+    """
+    Classifies each tile in the image based on the terrain prototypes for tid.
+    Returns a 20x20 grid of class labels (integers 0-4).
+    """
+    tiles = split_into_tiles(img)
+    grid = np.zeros((GRID, GRID), dtype=int)
+
+    for i in range(GRID):
+        for j in range(GRID):
+            f = tile_features(tiles[i][j])
+            # Find the class with minimum distance to the prototype
+            cls_scores = {cls: np.linalg.norm(f - p) 
+                          for cls, p in terrain_prototypes[tid].items()}
+            grid[i, j] = min(cls_scores, key=cls_scores.get)
+    return grid
+
+submission = []
+t0 = tm.time()
+files = sorted(os.listdir(TEST_IMG_DIR))
+
+pbar = tqdm(files, desc="Processing test maps", unit="image")
+
+for fname in pbar:
+    img_id = fname.replace(".png","")
+
+    img = cv2.cvtColor(
+        cv2.imread(os.path.join(TEST_IMG_DIR, fname)),
+        cv2.COLOR_BGR2RGB
+    )
+
+    tid = match_terrain(img)
+    grid = classify_grid_fast(img, tid)
+
+    with open(os.path.join(TEST_VEL_DIR, img_id + ".json")) as f:
+        boost = np.array(json.load(f)["boost"])
+    
+    path = dijkstra(grid, boost, tid)
+    if path == "":
+        path = "r"*19 + "d"*19
+
+    submission.append([img_id, path])
+
+    # Update live postfix on the same line
+    elapsed = (tm.time() - t0) / 60
+    pbar.set_postfix({"Processed": f"{len(submission)}/{len(files)}", "Elapsed (min)": f"{elapsed:.2f}"})
+
+pbar.close()
+print("Total time:", (tm.time() - t0) / 60, "minutes")
+
+submission_df = pd.DataFrame(
+    submission,
+    columns=["image_id", "path"]
+)
+
+submission_csv_path = "/kaggle/working/submission.csv"
+submission_df.to_csv(submission_csv_path, index=False)
+
+print(f"Submission saved to {submission_csv_path}")
